@@ -1,0 +1,282 @@
+1. Importing Required Libraries
+------------------------------------------
+
+import streamlit as st
+import PyPDF2
+from transformers import T5ForConditionalGeneration, T5Tokenizer
+from fpdf import FPDF
+
+streamlit: Framework to build the web app interface.
+
+PyPDF2: For reading and extracting text from PDF files.
+
+transformers: Hugging Face library; T5ForConditionalGeneration is used for text summarization and question generation, T5Tokenizer handles tokenizing text for the model.
+
+fpdf: To generate and download the generated questions as a PDF.
+
+------------------------------------------
+
+
+2. Creating the Web App Title and Instructions
+
+------------------------------------------
+
+st.title("AI PDF Question Generator")
+st.write("Upload a PDF file and generate summary and questions automatically.")
+
+st.title: Displays the main heading on the app.
+
+st.write: Adds a description or instructions for users.
+
+3. Loading the Question Generation Model
+
+------------------------------------------
+
+@st.cache_resource
+def load_question_model():
+    tokenizer = T5Tokenizer.from_pretrained("mrm8488/t5-base-finetuned-question-generation-ap")
+    model = T5ForConditionalGeneration.from_pretrained("mrm8488/t5-base-finetuned-question-generation-ap")
+    return tokenizer, model
+
+@st.cache_resource: Caches the model so it doesn’t reload every time you click a button (faster performance).
+
+Loads a pretrained T5 model fine-tuned for generating questions from text.
+
+Returns both the tokenizer (for input processing) and the model.
+
+------------------------------------------
+
+
+4. Loading the Summarization Model
+
+------------------------------------------
+
+@st.cache_resource
+def load_summary_model():
+    tokenizer = T5Tokenizer.from_pretrained("t5-small")
+    model = T5ForConditionalGeneration.from_pretrained("t5-small")
+    return tokenizer, model
+
+Similar to above but uses T5-small for summarization.
+
+This is a general-purpose summarization model.
+
+------------------------------------------
+
+
+5. Initializing Models
+
+------------------------------------------
+
+q_tokenizer, q_model = load_question_model()
+s_tokenizer, s_model = load_summary_model()
+
+Calls the above functions to load both models and their tokenizers into memory.
+
+------------------------------------------
+
+
+6. Uploading the PDF
+
+------------------------------------------
+
+uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+
+Adds a file uploader button to the Streamlit app.
+
+Restricts uploads to PDF files only.
+
+------------------------------------------
+
+
+7. Reading and Extracting Text from PDF
+
+------------------------------------------
+
+if uploaded_file is not None:
+
+    reader = PyPDF2.PdfReader(uploaded_file)
+    text = ""
+
+    for page in reader.pages:
+        extracted = page.extract_text()
+        if extracted:
+            text += extracted
+
+    text = text[:1500]
+
+Checks if the user uploaded a file.
+
+PdfReader opens the PDF.
+
+Loops through each page to extract text.
+
+Concatenates text from all pages into a single string.
+
+Limits text to the first 1500 characters for performance reasons.
+
+st.success("PDF uploaded successfully!")
+
+Displays a success message when the PDF is uploaded.
+
+------------------------------------------
+
+
+8. Feature 1 – Summary Generation
+
+------------------------------------------
+
+
+if st.button("Generate Summary"):
+
+    st.write("Generating summary...")
+
+    prompt = "summarize: " + text
+
+Adds a button for generating the summary.
+
+Prepares the input prompt by prefixing "summarize: " (required by T5 model to know the task).
+
+input_ids = s_tokenizer(
+    prompt,
+    return_tensors="pt",
+    max_length=512,
+    truncation=True
+).input_ids
+
+Tokenizes the prompt into IDs the model can understand.
+
+max_length=512: truncates text if too long.
+
+return_tensors="pt": converts input to PyTorch tensor.
+
+summary_ids = s_model.generate(
+    input_ids,
+    max_length=150,
+    min_length=40,
+    num_beams=4,
+    early_stopping=True
+)
+
+Generates the summary using beam search (controlled by num_beams=4).
+
+Limits summary length between 40 and 150 tokens.
+
+summary = s_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+st.subheader("PDF Summary")
+st.write(summary)
+
+Converts model output IDs back to text.
+
+Displays the summary in the Streamlit app.
+
+
+------------------------------------------
+
+
+9. Feature 2 – Question Generation
+
+------------------------------------------
+
+
+if st.button("Generate Questions"):
+
+    st.write("Generating questions...")
+
+    prompt = "answer: AI context: " + text
+
+Button for generating questions.
+
+T5 model expects a prompt like "answer: context:" for question generation.
+
+input_ids = q_tokenizer(
+    prompt,
+    return_tensors="pt",
+    max_length=512,
+    truncation=True
+).input_ids
+
+Tokenizes the prompt for the question generation model.
+
+outputs = q_model.generate(
+    input_ids,
+    max_length=128,
+    num_beams=5,
+    num_return_sequences=5,
+    early_stopping=True
+)
+
+Generates 5 different questions using beam search.
+
+questions = []
+st.subheader("Generated Questions")
+
+for i, output in enumerate(outputs):
+    question = q_tokenizer.decode(output, skip_special_tokens=True)
+    questions.append(question)
+    st.write(f"{i+1}. {question}")
+
+Decodes and displays each question.
+
+Stores questions in a list for PDF generation.
+
+
+------------------------------------------
+
+
+
+10. Feature 3 – Download Questions as PDF
+
+------------------------------------------
+
+
+pdf = FPDF()
+pdf.add_page()
+pdf.set_font("Arial", size=14)
+pdf.cell(200, 10, txt="Generated Questions", ln=True, align='C')
+pdf.ln(5)
+pdf.set_font("Arial", size=12)
+
+Creates a new PDF page and sets fonts.
+
+Adds a centered title for the PDF.
+
+for i, q in enumerate(questions):
+    safe_q = q.encode('latin-1', 'replace').decode('latin-1')
+    pdf.multi_cell(0, 10, txt=f"{i+1}. {safe_q}")
+    pdf.ln(2)
+
+Loops through questions and writes them to the PDF.
+
+Encodes safely to avoid errors with special characters.
+
+pdf_file = "questions.pdf"
+pdf.output(pdf_file)
+
+Saves the PDF locally as questions.pdf.
+
+with open(pdf_file, "rb") as file:
+    st.download_button(
+        label="Download Questions as PDF",
+        data=file,
+        file_name="questions.pdf",
+        mime="application/pdf"
+    )
+
+Creates a download button in Streamlit.
+
+Lets the user download the generated questions as a PDF file.
+
+
+------------------------------------------
+
+
+Summary of Workflow
+
+------------------------------------------
+
+User uploads a PDF.
+App extracts text (first 1500 characters).
+User can generate a summary using T5-small.
+User can generate multiple questions using T5 fine-tuned QG model.
+Questions can be downloaded as a PDF file.
